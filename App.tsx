@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { HashRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { 
@@ -245,13 +246,13 @@ const InventoryManager = () => {
     document.body.removeChild(link);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isEditing) {
-      updateMaterial({ ...isEditing, ...formData });
+      await updateMaterial({ ...isEditing, ...formData });
       setIsEditing(null);
     } else {
-      addMaterial(formData);
+      await addMaterial(formData);
     }
     setFormData({ name: '', stock: 0, unit: '' });
   };
@@ -562,14 +563,17 @@ const UserInventory = () => {
 const RequestQueue = () => {
   const { requests, users, materials, updateRequestStatus } = useDb();
   
-  const sortedRequests = [...requests].sort((a, b) => {
-    if (a.status === 'PENDING' && b.status !== 'PENDING') return -1;
-    if (a.status !== 'PENDING' && b.status === 'PENDING') return 1;
-    return new Date(b.request_date).getTime() - new Date(a.request_date).getTime();
-  });
+  // UseMemo for sorting to prevent re-calc on every render
+  const sortedRequests = useMemo(() => {
+    return [...requests].sort((a, b) => {
+      if (a.status === 'PENDING' && b.status !== 'PENDING') return -1;
+      if (a.status !== 'PENDING' && b.status === 'PENDING') return 1;
+      return new Date(b.request_date).getTime() - new Date(a.request_date).getTime();
+    });
+  }, [requests]);
 
-  const handleAction = (id: number | string, action: RequestStatus) => {
-    const result = updateRequestStatus(id, action);
+  const handleAction = async (id: number | string, action: RequestStatus) => {
+    const result = await updateRequestStatus(id, action);
     if (!result.success) {
       alert(result.message);
     }
@@ -690,12 +694,16 @@ const UserPortal = () => {
 
   if (!currentUser) return <div>กรุณาเข้าสู่ระบบ</div>;
 
-  const myRequests = requests.filter(r => r.user_id === currentUser.id).sort((a,b) => new Date(b.request_date).getTime() - new Date(a.request_date).getTime());
+  const myRequests = useMemo(() => {
+    return requests
+      .filter(r => r.user_id === currentUser.id)
+      .sort((a,b) => new Date(b.request_date).getTime() - new Date(a.request_date).getTime());
+  }, [requests, currentUser.id]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedMaterial && quantity > 0) {
-      createRequest(currentUser.id, Number(selectedMaterial), quantity);
+      await createRequest(currentUser.id, Number(selectedMaterial), quantity);
       setSelectedMaterial('');
       setQuantity(1);
     }
@@ -796,10 +804,10 @@ const UserManager = () => {
     role: 'USER' as 'USER' | 'ADMIN' 
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isEditing) {
-      updateUser({ ...isEditing, ...formData });
+      await updateUser({ ...isEditing, ...formData });
       setIsEditing(null);
     } else {
       // Check for duplicate username
@@ -807,7 +815,7 @@ const UserManager = () => {
         alert("Username นี้มีผู้ใช้งานแล้ว");
         return;
       }
-      addUser(formData);
+      await addUser(formData);
     }
     setFormData({ username: '', password: '', name: '', department: '', role: 'USER' });
   };

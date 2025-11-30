@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import { DatabaseState, Material, Request, RequestStatus, User } from '../types';
 import { db } from './firebase';
 import { 
@@ -39,16 +39,16 @@ const INITIAL_DATA: DatabaseState = {
 };
 
 interface DbContextType extends DatabaseState {
-  addMaterial: (m: Omit<Material, 'id'>) => void;
-  updateMaterial: (m: Material) => void;
-  deleteMaterial: (id: number | string) => void;
+  addMaterial: (m: Omit<Material, 'id'>) => Promise<void>;
+  updateMaterial: (m: Material) => Promise<void>;
+  deleteMaterial: (id: number | string) => Promise<void>;
   
-  addUser: (u: Omit<User, 'id'>) => void;
-  updateUser: (u: User) => void;
-  deleteUser: (id: number | string) => void;
+  addUser: (u: Omit<User, 'id'>) => Promise<void>;
+  updateUser: (u: User) => Promise<void>;
+  deleteUser: (id: number | string) => Promise<void>;
   
-  createRequest: (userId: number | string, materialId: number | string, quantity: number) => void;
-  updateRequestStatus: (requestId: number | string, status: RequestStatus) => { success: boolean; message?: string };
+  createRequest: (userId: number | string, materialId: number | string, quantity: number) => Promise<void>;
+  updateRequestStatus: (requestId: number | string, status: RequestStatus) => Promise<{ success: boolean; message?: string }>;
   
   currentUser: User | null;
   login: (username: string, password: string) => boolean;
@@ -74,10 +74,10 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     return savedUser ? JSON.parse(savedUser) : null;
   });
 
-  // --- Firebase Sync Logic & Seeding ---
+  // --- Effect 1: Firebase Connection (Runs ONCE on mount) ---
   useEffect(() => {
     if (ENABLE_FIREBASE && db) {
-      console.log("Connecting to Firebase...");
+      console.log("Starting Firebase listeners...");
       
       // Auto-Seed Logic: Check if Users collection is empty, if so, inject initial data
       const checkAndSeed = async () => {
@@ -129,16 +129,22 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       });
 
       return () => {
+        console.log("Unsubscribing from Firebase listeners...");
         unsubMaterials();
         unsubUsers();
         unsubRequests();
       };
-    } else {
-      // LocalStorage persistence
+    }
+  }, []); // Empty dependency array ensures this runs once
+
+  // --- Effect 2: LocalStorage Sync (Runs when data changes, ONLY if Firebase is OFF) ---
+  useEffect(() => {
+    if (!ENABLE_FIREBASE || !db) {
       localStorage.setItem('office_supply_db', JSON.stringify(data));
     }
-  }, [data, ENABLE_FIREBASE]);
+  }, [data]);
 
+  // --- Effect 3: User Persistence ---
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('office_supply_current_user', JSON.stringify(currentUser));
@@ -148,21 +154,21 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   }, [currentUser]);
 
   // --- Auth Logic ---
-  const login = (username: string, password: string) => {
+  const login = useCallback((username: string, password: string) => {
     const user = data.users.find(u => u.username === username && u.password === password);
     if (user) {
       setCurrentUser(user);
       return true;
     }
     return false;
-  };
+  }, [data.users]);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setCurrentUser(null);
-  };
+  }, []);
 
   // --- Material Logic ---
-  const addMaterial = async (m: Omit<Material, 'id'>) => {
+  const addMaterial = useCallback(async (m: Omit<Material, 'id'>) => {
     if (ENABLE_FIREBASE && db) {
       await addDoc(collection(db, "materials"), m);
     } else {
@@ -170,9 +176,9 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const material = { ...m, id: newId };
       setData(prev => ({ ...prev, materials: [...prev.materials, material] }));
     }
-  };
+  }, []);
 
-  const updateMaterial = async (m: Material) => {
+  const updateMaterial = useCallback(async (m: Material) => {
     if (ENABLE_FIREBASE && db) {
        const docRef = doc(db, "materials", String(m.id));
        await updateDoc(docRef, { name: m.name, stock: m.stock, unit: m.unit });
@@ -182,9 +188,9 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         materials: prev.materials.map(item => item.id === m.id ? m : item)
       }));
     }
-  };
+  }, []);
 
-  const deleteMaterial = async (id: number | string) => {
+  const deleteMaterial = useCallback(async (id: number | string) => {
     if (ENABLE_FIREBASE && db) {
       await deleteDoc(doc(db, "materials", String(id)));
     } else {
@@ -193,10 +199,10 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         materials: prev.materials.filter(item => item.id !== id)
       }));
     }
-  };
+  }, []);
 
   // --- User Logic ---
-  const addUser = async (u: Omit<User, 'id'>) => {
+  const addUser = useCallback(async (u: Omit<User, 'id'>) => {
     if (ENABLE_FIREBASE && db) {
       await addDoc(collection(db, "users"), u);
     } else {
@@ -205,9 +211,9 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         users: [...prev.users, { ...u, id: Date.now() }]
       }));
     }
-  };
+  }, []);
 
-  const updateUser = async (u: User) => {
+  const updateUser = useCallback(async (u: User) => {
     if (ENABLE_FIREBASE && db) {
       await updateDoc(doc(db, "users", String(u.id)), { 
         name: u.name, department: u.department, role: u.role, username: u.username, password: u.password 
@@ -220,9 +226,9 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }));
       if (currentUser && currentUser.id === u.id) setCurrentUser(u);
     }
-  };
+  }, [currentUser]);
 
-  const deleteUser = async (id: number | string) => {
+  const deleteUser = useCallback(async (id: number | string) => {
     if (ENABLE_FIREBASE && db) {
       await deleteDoc(doc(db, "users", String(id)));
     } else {
@@ -231,10 +237,10 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         users: prev.users.filter(item => item.id !== id)
       }));
     }
-  };
+  }, []);
 
   // --- Request Logic ---
-  const createRequest = async (userId: number | string, materialId: number | string, quantity: number) => {
+  const createRequest = useCallback(async (userId: number | string, materialId: number | string, quantity: number) => {
     const newRequest: Omit<Request, 'id'> = {
       user_id: userId,
       material_id: materialId,
@@ -249,11 +255,30 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const req = { ...newRequest, id: Date.now() };
       setData(prev => ({ ...prev, requests: [req as Request, ...prev.requests] }));
     }
-  };
+  }, []);
 
-  const updateRequestStatus = (requestId: number | string, status: RequestStatus): { success: boolean; message?: string } => {
+  const updateRequestStatus = useCallback(async (requestId: number | string, status: RequestStatus): Promise<{ success: boolean; message?: string }> => {
     let success = true;
     let message = 'อัปเดตสถานะเรียบร้อย';
+
+    // Note: In a real app, we should fetch the latest stock from DB to be atomic.
+    // For this app, we rely on the synced state.
+    
+    // We need to find the request from current state
+    // But since this is inside useCallback, we need access to 'data'.
+    // However, adding 'data' to deps will re-create function.
+    // So we'll use a functional state update or just access the ref if we had one.
+    // For simplicity with Firebase, we can fetch the doc directly or trust the state if it's synced fast enough.
+    // Here we will use the state passed in Context, which might be slightly stale in a closure, 
+    // but typically fine for this scale. 
+    // Better yet: Pass the logic to a component or use refs. 
+    // BUT, since we are using `data` from scope, we must add it to dependency.
+    // To avoid loop, we rely on the fact that `data` only updates when firebase notifies us.
+    
+    // Actually, to make this robust without `data` dependency causing loops in consumers:
+    // We will read from the state variable which is captured in closure.
+    // We have to accept that `updateRequestStatus` reference changes when `data` changes.
+    // This is fine as long as `useEffect` in DbProvider doesn't depend on it.
 
     const req = data.requests.find(r => r.id === requestId);
     if (!req) return { success: false, message: 'ไม่พบรายการเบิก' };
@@ -270,8 +295,8 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const newStock = material.stock - req.quantity;
       
       if (ENABLE_FIREBASE && db) {
-        updateDoc(doc(db, "materials", String(material.id)), { stock: newStock });
-        updateDoc(doc(db, "requests", String(requestId)), { status: status });
+        await updateDoc(doc(db, "materials", String(material.id)), { stock: newStock });
+        await updateDoc(doc(db, "requests", String(requestId)), { status: status });
       } else {
         // LocalStorage Mode
         setData(prev => {
@@ -288,7 +313,7 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     } else {
       // Just status update (Approved/Rejected)
       if (ENABLE_FIREBASE && db) {
-        updateDoc(doc(db, "requests", String(requestId)), { status: status });
+        await updateDoc(doc(db, "requests", String(requestId)), { status: status });
       } else {
         setData(prev => ({
           ...prev,
@@ -298,24 +323,27 @@ export const DbProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     }
 
     return { success, message };
-  };
+  }, [data]); // Dependencies needed for logic
+
+  // Memoize the context value to prevent unnecessary re-renders in consumers
+  const contextValue = useMemo(() => ({
+    ...data,
+    addMaterial,
+    updateMaterial,
+    deleteMaterial,
+    addUser,
+    updateUser,
+    deleteUser,
+    createRequest,
+    updateRequestStatus,
+    currentUser,
+    login,
+    logout,
+    isFirebaseEnabled: ENABLE_FIREBASE
+  }), [data, addMaterial, updateMaterial, deleteMaterial, addUser, updateUser, deleteUser, createRequest, updateRequestStatus, currentUser, login, logout]);
 
   return (
-    <DbContext.Provider value={{
-      ...data,
-      addMaterial,
-      updateMaterial,
-      deleteMaterial,
-      addUser,
-      updateUser,
-      deleteUser,
-      createRequest,
-      updateRequestStatus,
-      currentUser,
-      login,
-      logout,
-      isFirebaseEnabled: ENABLE_FIREBASE
-    }}>
+    <DbContext.Provider value={contextValue}>
       {children}
     </DbContext.Provider>
   );
